@@ -10,35 +10,9 @@ from dataclasses import dataclass
 import math
 import time
 import pickle
-
-
-@dataclass
-class Position:
-    x: int
-    y: int
-    radius: int
-
-
-@dataclass
-class Contour:
-    x: int
-    y: int
-    radius: int
-    ss: float
-
-
-@dataclass
-class FrameData:
-    frame_number: int
-    analyzed: bool
-    frame_read_time: float = None
-    mask_creation_time: float = None
-    contour_find_time: float = None
-    num_contours: int = None
-    num_evaluated_contours: int = None
-    contour_evaluated_time: float = None
-    contour_evaluated_time_avg: float = None
-    ball_position: Position = None
+import cProfile
+import pstats
+from dataclasses import Position, FrameData, Contour
 
 
 class MainClass:
@@ -225,4 +199,9 @@ if __name__ == "__main__":
     else:
         logger.setLevel(logging.INFO)
     main = MainClass(args)
-    main.run()
+    with cProfile.Profile() as pr:
+        main.run()
+    stats = pstats.Stats(pr)
+    stats = stats.sort_stats('cumulative')
+    stats.print_stats()
+    stats.dump_stats(f"{args.output}_profile.txt")
