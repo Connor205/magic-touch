@@ -1,6 +1,5 @@
 # This program will trace the ball and draw annotate the balls path over the entire video
 import argparse
-from typing import Counter
 import cv2
 import numpy as np
 import tensorflow as tf
@@ -12,7 +11,8 @@ import time
 import pickle
 import cProfile
 import pstats
-from dataclasses import Position, FrameData, Contour
+import dataclasses
+from user_dataclasses import Position, FrameData, Contour
 
 
 class MainClass:

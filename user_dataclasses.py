@@ -34,3 +34,20 @@ class FrameData:
 class Point:
     x: int
     y: int
+
+@dataclass
+class Interval:
+    start: int
+    end: int
+    frames: list[int] = field(default_factory=list)
+
+@dataclass
+class Possesion():
+    num_net_hits: int
+    start_frame: int
+    end_frame: int
+    start_time: float
+    end_time: float
+    duration: float # Duration in seconds
+
+

@@ -6,12 +6,17 @@ import tensorflow as tf
 import cProfile
 import pstats
 import logging
-from user_dataclasses import Contour
+from user_dataclasses import Contour, Interval, Possesion
 from tqdm import tqdm
 from imutils.video import FileVideoStream
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+from pprint import pprint
 
 
 class VideoData:
+    TIME_BEFORE_CONTACT = 1.0
+    TIME_AFTER_CONTACT = 4
+
     def __init__(self,
                  video_path,
                  nn_path,
@@ -38,6 +43,11 @@ class VideoData:
         self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.frame_shape = (self.frame_height, self.frame_width)
         self.nn = tf.keras.models.load_model(nn_path)
+        self.frames_before_contact = self.fps * self.TIME_BEFORE_CONTACT
+        self.frames_after_contact = self.fps * self.TIME_AFTER_CONTACT 
+        self.ball_bounce_frames = None
+        self.point_intervals = None
+        self.possesions = None
 
     def get_ball_bounce_frames(self):
         # This function will return a list of frame numbers where the ball is contained within the selected bounding box
@@ -53,15 +63,20 @@ class VideoData:
         ry = min(bounding_box[1][1] + 25, self.frame_height)
         w = rx - lx
         h = ry - ly
-        self.logger.info(f'Bounding box: {lx}, {ly}, {rx}, {ry}')
+        self.logger.info(f'Bounding box: ({lx}, {ly}), ({rx}, {ry})')
         fg = cv2.createBackgroundSubtractorMOG2(history=25,
                                                 detectShadows=False)
-        self.logger.info(f'Created foreground mask')
+        self.logger.info(f'Created foreground mask object')
+
+        frames_to_skip = 0
 
         for _ in tqdm(range(self.frame_count)):
             fno += 1
             frame = self.videoStream.read()
             if frame is not None:
+                # if  not frames_to_skip == 0:
+                #     frames_to_skip = frames_to_skip - 1
+                #     continue
                 # Lets go ahead and grab the part of the frame that contains the bounding box as defined by the user
                 cropped_frame = frame[ly:ry, lx:rx]
                 # Now lets check if the ball is contained within the cropped frame
@@ -75,10 +90,6 @@ class VideoData:
                                                        cv2.RETR_EXTERNAL,
                                                        cv2.CHAIN_APPROX_SIMPLE)
                 evaluated_contours = []
-                # cv2.imshow('fgmask', fgmask)
-                # cv2.imshow('cropped_frame', cropped_frame)
-                # cv2.imshow('frame', frame)
-                # cv2.waitKey(1)
                 for c in contours:
                     circle = cv2.minEnclosingCircle(c)
                     area = cv2.contourArea(c)
@@ -110,5 +121,90 @@ class VideoData:
                             f"Frame: {fno} - Found spikeball in frame")
             else:
                 break
-
         return ball_bounce_frames
+
+    def get_point_intervals(self) -> list[Interval]:
+        if self.ball_bounce_frames is None:
+            self.ball_bounce_frames = self.get_ball_bounce_frames()
+        
+        intervals: list[Interval] = []
+
+        inside = False
+        prev = None
+        for frame_number in self.ball_bounce_frames:
+            if prev is None:
+                prev = frame_number
+                intervals.append(Interval(start=max(frame_number - self.frames_before_contact, 0), end=None))
+                intervals[-1].frames.append(frame_number)
+                continue
+            if frame_number - prev > self.frames_after_contact:
+                intervals[-1].end = prev + self.frames_after_contact
+                inside = False
+                intervals.append(Interval(start=frame_number - self.frames_before_contact, end=None))
+                intervals[-1].frames.append(frame_number)
+            else:
+                intervals[-1].frames.append(frame_number)
+            prev = frame_number
+        # Now we should go merge all of the overlapping intervals, since it is possible for some of those to exist
+        # The intervals are already sorted by their start time
+        merged_intervals: list[Interval] = []
+        for interval in intervals:
+            if len(merged_intervals) == 0:
+                merged_intervals.append(interval)
+                continue
+            if interval.start <= merged_intervals[-1].end:
+                merged_intervals[-1].end = max(interval.end, merged_intervals[-1].end)
+                merged_intervals[-1].frames.extend(interval.frames)
+            else:
+                merged_intervals.append(interval)
+        return merged_intervals
+    
+    def get_possessions(self) -> list[Possesion]:
+        if self.point_intervals is None:
+            self.point_intervals = self.get_point_intervals()
+        possesions: list[Possesion] = []
+        for interval in self.point_intervals:
+            if interval.end is None:
+                continue
+            num_net_hits = 0
+            frames = interval.frames
+            skip_to = None
+            for fno in frames:
+                if skip_to is None or fno > skip_to:
+                    skip_to = fno + self.fps // 3
+                    num_net_hits = num_net_hits + 1
+            possesions.append(Possesion(num_net_hits, interval.start, interval.end, interval.start / self.fps, interval.end / self.fps, (interval.end - interval.start) / self.fps))
+        pprint(possesions)
+        return possesions
+    
+    def cut_video_into_possesions(self, output_path: str, include_faults=False):
+        if self.possesions is None:
+            self.possesions = self.get_possessions()
+        filtered_possesions = self.possesions.copy()
+        if not include_faults: 
+            filtered_possesions = [x for x in filtered_possesions if x.num_net_hits > 1]
+        clips = []
+        video = VideoFileClip(self.video_path)
+        for possesion in tqdm(filtered_possesions):
+            if possesion.end_frame is not None:
+                clips.append(video.subclip(possesion.start_time, possesion.end_time))
+
+        final_clip = concatenate_videoclips(clips)
+        final_clip.write_videofile(output_path, threads=8, audio=False, fps=self.fps)
+        final_clip.close()
+        
+        
+    def cut_video_into_points(self, output_path) -> None:
+        if self.point_intervals is None:
+            self.point_intervals = self.get_point_intervals()
+        clips = []
+        video = VideoFileClip(self.video_path)
+        for interval in tqdm(self.point_intervals):
+            if interval.end is not None:
+                clips.append(video.subclip(interval.start//self.fps, interval.end//self.fps))
+
+        final_clip = concatenate_videoclips(clips)
+        final_clip.write_videofile(output_path, threads=8, audio=False, fps=self.fps)
+        final_clip.close()
+        
+        

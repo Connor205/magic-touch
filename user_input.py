@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from user_dataclasses import *
 import logging
-import time
+from util_functions import *
 
 
 class UserInput:
@@ -44,6 +44,7 @@ class UserInput:
             cv2.waitKey(1)
             if len(points) == num_clicks:
                 collected_points = True
+        closeWindows()
         return points
 
     def selectRectInImage(self, img):
@@ -60,7 +61,7 @@ class UserInput:
         self.logger.info(f'Points selected: {points}')
         self.logger.info("The selected rectangle is now shown on the display")
         img_copy = img.copy()
-        cv2.rectangle(img_copy, points[0], points[1], (0, 0, 255), -1)
+        cv2.rectangle(img_copy, points[0], points[1], (0, 0, 255), 5)
         self.logger.info(
             "If you would like to redo the points then please press r, otherwise click any other key"
         )
@@ -69,6 +70,5 @@ class UserInput:
         if k == ord('r'):
             self.logger.info("Redoing points")
             points = self.selectRectInImage(img)
-        cv2.destroyAllWindows()
-        time.sleep(3)
+        closeWindows()
         return points
